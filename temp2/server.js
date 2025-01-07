@@ -3,51 +3,42 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
-const fs = require('fs').promises;
-const path = require('path');
+const Redis = require('ioredis');
 require('dotenv').config();
 
 const app = express();
 const PORT = 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
+// Redis client setup
+const redis = new Redis({
+    port: 6379,
+    host: '127.0.0.1',
+    // password: process.env.REDIS_PASSWORD, // Uncomment if you have password
+});
+
+// Handle Redis connection errors
+redis.on('error', (error) => {
+    console.error('Redis connection error:', error);
+});
+
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// File paths
-const DATA_DIR = path.join(__dirname, 'data');
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
-const POSTS_FILE = path.join(DATA_DIR, 'posts.json');
-const FORMS_FILE = path.join(DATA_DIR, 'forms.json');
-
-// Ensure data directory and files exist
-async function initializeDataFiles() {
-    try {
-        await fs.mkdir(DATA_DIR, { recursive: true });
-        
-        // Initialize files if they don't exist
-        const files = [USERS_FILE, POSTS_FILE, FORMS_FILE];
-        for (const file of files) {
-            try {
-                await fs.access(file);
-            } catch {
-                await fs.writeFile(file, JSON.stringify([]));
-            }
-        }
-    } catch (error) {
-        console.error('Error initializing data files:', error);
-    }
+// Redis helper functions
+async function saveToRedis(key, data) {
+    await redis.set(key, JSON.stringify(data));
 }
 
-// File operations helper functions
-async function readJsonFile(filePath) {
-    const data = await fs.readFile(filePath, 'utf8');
-    return JSON.parse(data);
+async function getFromRedis(key) {
+    const data = await redis.get(key);
+    return data ? JSON.parse(data) : null;
 }
 
-async function writeJsonFile(filePath, data) {
-    await fs.writeFile(filePath, JSON.stringify(data, null, 2));
+async function getList(key) {
+    const data = await redis.get(key);
+    return data ? JSON.parse(data) : [];
 }
 
 // Auth middleware
@@ -69,10 +60,10 @@ const authenticateToken = async (req, res, next) => {
 };
 
 // Auth Routes
-app.post('/api/signup', async (req, res) => {
+app.post('/api/auth/signup', async (req, res) => {
     try {
         const { name, email, phone, gender, password } = req.body;
-        const users = await readJsonFile(USERS_FILE);
+        const users = await getList('users');
 
         if (users.find(u => u.email === email)) {
             return res.status(409).json({ message: 'Email already exists' });
@@ -89,19 +80,19 @@ app.post('/api/signup', async (req, res) => {
         };
 
         users.push(newUser);
-        await writeJsonFile(USERS_FILE, users);
+        await saveToRedis('users', users);
 
         res.status(201).json({ message: 'User created successfully' });
     } catch (error) {
-        console.log(error);
+        console.error('Signup error:', error);
         res.status(500).json({ message: 'Server error' });
     }
 });
 
-app.post('/api/login', async (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
     try {
         const { email, password } = req.body;
-        const users = await readJsonFile(USERS_FILE);
+        const users = await getList('users');
         const user = users.find(u => u.email === email);
 
         if (!user || !(await bcrypt.compare(password, user.password))) {
@@ -118,6 +109,7 @@ app.post('/api/login', async (req, res) => {
             }
         });
     } catch (error) {
+        console.error('Login error:', error);
         res.status(500).json({ message: 'Server error' });
     }
 });
@@ -125,16 +117,17 @@ app.post('/api/login', async (req, res) => {
 // Posts Routes
 app.get('/api/posts', async (req, res) => {
     try {
-        const posts = await readJsonFile(POSTS_FILE);
+        const posts = await getList('posts');
         res.json(posts);
     } catch (error) {
+        console.error('Get posts error:', error);
         res.status(500).json({ message: 'Server error' });
     }
 });
 
 app.get('/api/posts/:id', async (req, res) => {
     try {
-        const posts = await readJsonFile(POSTS_FILE);
+        const posts = await getList('posts');
         const post = posts.find(p => p.id === req.params.id);
         
         if (!post) {
@@ -143,6 +136,7 @@ app.get('/api/posts/:id', async (req, res) => {
         
         res.json(post);
     } catch (error) {
+        console.error('Get post error:', error);
         res.status(500).json({ message: 'Server error' });
     }
 });
@@ -150,7 +144,7 @@ app.get('/api/posts/:id', async (req, res) => {
 app.post('/api/posts', authenticateToken, async (req, res) => {
     try {
         const { title, content } = req.body;
-        const posts = await readJsonFile(POSTS_FILE);
+        const posts = await getList('posts');
         
         const newPost = {
             id: Date.now().toString(),
@@ -161,10 +155,11 @@ app.post('/api/posts', authenticateToken, async (req, res) => {
         };
 
         posts.push(newPost);
-        await writeJsonFile(POSTS_FILE, posts);
+        await saveToRedis('posts', posts);
         
         res.status(201).json(newPost);
     } catch (error) {
+        console.error('Create post error:', error);
         res.status(500).json({ message: 'Server error' });
     }
 });
@@ -172,7 +167,7 @@ app.post('/api/posts', authenticateToken, async (req, res) => {
 app.put('/api/posts/:id', authenticateToken, async (req, res) => {
     try {
         const { title, content } = req.body;
-        const posts = await readJsonFile(POSTS_FILE);
+        const posts = await getList('posts');
         const postIndex = posts.findIndex(p => p.id === req.params.id);
         
         if (postIndex === -1) {
@@ -189,16 +184,17 @@ app.put('/api/posts/:id', authenticateToken, async (req, res) => {
             content
         };
         
-        await writeJsonFile(POSTS_FILE, posts);
+        await saveToRedis('posts', posts);
         res.json(posts[postIndex]);
     } catch (error) {
+        console.error('Update post error:', error);
         res.status(500).json({ message: 'Server error' });
     }
 });
 
 app.delete('/api/posts/:id', authenticateToken, async (req, res) => {
     try {
-        const posts = await readJsonFile(POSTS_FILE);
+        const posts = await getList('posts');
         const postIndex = posts.findIndex(p => p.id === req.params.id);
         
         if (postIndex === -1) {
@@ -210,10 +206,11 @@ app.delete('/api/posts/:id', authenticateToken, async (req, res) => {
         }
         
         posts.splice(postIndex, 1);
-        await writeJsonFile(POSTS_FILE, posts);
+        await saveToRedis('posts', posts);
         
         res.json({ message: 'Post deleted' });
     } catch (error) {
+        console.error('Delete post error:', error);
         res.status(500).json({ message: 'Server error' });
     }
 });
@@ -222,8 +219,8 @@ app.delete('/api/posts/:id', authenticateToken, async (req, res) => {
 app.post('/api/posts/:postId/forms', authenticateToken, async (req, res) => {
     try {
         const { formData } = req.body;
-        const forms = await readJsonFile(FORMS_FILE);
-        const posts = await readJsonFile(POSTS_FILE);
+        const forms = await getList('forms');
+        const posts = await getList('posts');
         
         if (!posts.find(p => p.id === req.params.postId)) {
             return res.status(404).json({ message: 'Post not found' });
@@ -238,28 +235,27 @@ app.post('/api/posts/:postId/forms', authenticateToken, async (req, res) => {
         };
         
         forms.push(newForm);
-        await writeJsonFile(FORMS_FILE, forms);
+        await saveToRedis('forms', forms);
         
         res.status(201).json(newForm);
     } catch (error) {
+        console.error('Submit form error:', error);
         res.status(500).json({ message: 'Server error' });
     }
 });
 
 app.get('/api/posts/:postId/forms', async (req, res) => {
     try {
-        const forms = await readJsonFile(FORMS_FILE);
+        const forms = await getList('forms');
         const postForms = forms.filter(f => f.postId === req.params.postId);
         res.json(postForms);
     } catch (error) {
+        console.error('Get forms error:', error);
         res.status(500).json({ message: 'Server error' });
     }
 });
 
-// Initialize data files and start server
-(async () => {
-    await initializeDataFiles();
-    app.listen(PORT, () => {
-        console.log(`Server running on port ${PORT}`);
-    });
-})();
+// Start server
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+});
