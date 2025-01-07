@@ -60,7 +60,7 @@ const authenticateToken = async (req, res, next) => {
 };
 
 // Auth Routes
-app.post('/api/auth/signup', async (req, res) => {
+app.post('/api/signup', async (req, res) => {
     try {
         const { name, email, phone, gender, password } = req.body;
         const users = await getList('users');
@@ -89,7 +89,7 @@ app.post('/api/auth/signup', async (req, res) => {
     }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
         const users = await getList('users');
