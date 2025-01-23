@@ -149,6 +149,25 @@ app.put("/api/users/profile", authenticateToken, async (req, res) => {
   }
 });
 
+app.get("/api/users/:id", authenticateToken, async (req, res) => {
+  try {
+    const users = await getList("users");
+    const user = users.find((u) => u.id === req.params.id);
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Exclude sensitive data such as password
+    const { password, ...userData } = user;
+
+    res.json(userData);
+  } catch (error) {
+    console.error("Get user error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 // Posts Routes
 app.get("/api/posts", async (req, res) => {
   try {
